@@ -75,6 +75,11 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
     def get_name(self):
         return 'ATF2_Ext'
 
+    def log(self, message):
+        # The methods of this interface report through self.log(); a GUI may replace it
+        # with its own console by assigning interface.log.
+        print(message)
+
     def __init__(self, bg_shots=10.0, nsamples=10, nominal_intensity=0.15, wfs_intensity=0.1):
         self.screen_backgrounds = {}
         self.nsamples = nsamples
@@ -524,11 +529,16 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
         try:
             bdes = np.array([self.current_to_k1l(n, i) for n, i in zip(names, ides)], dtype=float)
             bact = np.array([self.current_to_k1l(n, i) for n, i in zip(names, iact)], dtype=float)
-            self.update_tracking_model_with_clibmagnet(names=names, nominal_bdes_value = bdes, nominal_bact_value = bact)
         except Exception as exc:
             print(f"current to K1 conversion failed for quadrupoles {names}: {exc}")
             bdes = np.array([np.nan for _ in names], dtype=float)
             bact = np.array([np.nan for _ in names], dtype=float)
+        else:
+            # A failure to update the tracking model must not discard the strengths read from the machine.
+            try:
+                self.update_tracking_model_with_clibmagnet(names=names, nominal_bdes_value = bdes, nominal_bact_value = bact)
+            except Exception as exc:
+                print(f"WARNING: tracking model not updated for quadrupoles {names}: {exc}")
 
         data = {
             "names": names,
