@@ -7,8 +7,9 @@
 |---|---|
 | `f2c8890` | ATF2 Ext のビームラインの並びにある電磁石名を BPM 名に対応付ける |
 | `9f8fbb3` | BPM の強度が記録されていなくても軌道を計算する |
+| `126f4db` | 古い ATF2 Ext データのビームラインの並びを作り直すツールを追加 |
 
-変更したファイル：`backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`、`machine_interfaces/Backend/State.py`、`tests/test_bpm_intensity.py`（新規）
+変更したファイル：`backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`、`backends/atf2/machine_interfaces_atf2/repair_ext_sequence.py`（新規）、`machine_interfaces/Backend/State.py`、`tests/test_bpm_intensity.py`（新規）、`tests/test_repair_ext_sequence.py`（新規）
 
 ---
 
@@ -77,7 +78,35 @@ python -m pytest tests -q
 
 ---
 
+## 3. 古い ATF2 Ext データのビームラインの並びを作り直すツールを追加（`126f4db`）
+
+### 問題
+変更1より前に記録されたデータの並びは25項目で、BPM は2台（`MB2X`、`MSF1FF`）しか入っていません。2026-11-19 のデータで応答行列を計算すると、「最初に選んだ補正電磁石より後ろの BPM だけを使う」絞り込みで `MSF1FF` だけが残ります。この BPM は x = y = 0 を返すため、すべての DATA ペアが飛ばされ、GUI に「No complete corrector readbacks available for response-matrix.」と表示されていました。
+
+### 変更
+**`backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`**
+- 取り出しラインの電磁石の一覧（`EXT_SEQUENCE`）と、`ATF2:monitors` の番号と BPM 名の対応表（`MONITOR_INDEX_TO_NAME`）を、モジュールの定数にしました。
+- `build_ext_sequence()` がこれらから EPICS なしで並びを作ります。`InterfaceATF2_Ext.__init__()` もこの関数を呼び、以前とまったく同じ並びになります（78項目。`MDUMP`、`IPBPM1` など12台の BPM は、これまでどおり位置が分かりません）。
+
+**`backends/atf2/machine_interfaces_atf2/repair_ext_sequence.py`（新規）**
+- データフォルダを `元のフォルダ名_sequence_fixed`（または `--out` で指定した場所）にコピーし、コピーの中の ATF2 Ext の状態ファイルすべてで `sequence` だけを書き換えます。ファイルのそれ以外の中身はそのまま残し、他のファイルもそのままコピーします。
+- 元のフォルダは変更しません。コピー先がすでにあるときは処理を中止します。
+
+```bash
+python -m machine_interfaces_atf2.repair_ext_sequence ~/CERN-Flight_Simulator-Data
+```
+
+その後、GUI では `CERN-Flight_Simulator-Data_sequence_fixed` の中のフォルダを選んでください。
+
+**`tests/test_repair_ext_sequence.py`（新規）** — 4件：補正電磁石の間に BPM が正しく並ぶこと、古い並びの BPM が残ること、修復したコピーの中身（gzip と非圧縮の pickle、他のインターフェースのファイルは変更しない、元のファイルは変更しない）、コピー先がすでにあると中止すること。
+
+### 確認結果
+- `tests/` の10件すべて成功。
+- 2026-11-19 のデータ：12ファイルを修復（並び 25 → 78項目）。修復後、`ATF2_Ext_20261119_112700_Orbit` で `ZH1X` と `ZV1X` に対する応答行列が50台の BPM で計算できました。応答が最大の BPM は `MQD18X`（`ZH1X`、水平）と `MQD4BFF`（`ZV1X`、垂直）で、生データの ± の軌道差と一致します。
+
+---
+
 ## この変更では対応していない問題
-- **2026-11-19 のデータからは、まだ応答行列を計算できません。** このデータに記録されている並びは変更1より前に書かれたもので、BPM が2台（`MB2X`、`MSF1FF`、どちらも値が0）しか入っていません。このブランチで記録したデータでは起きないはずですが、既存のデータを使うには並びを作り直す必要があります。
+- **変更1より前に記録されたデータ**は、上のツールで修復しないと、応答行列・BBA・軌道バンプで使えません。
 - **値が固定された BPM**（`MFB2FF`、`MIPA`、`MIPB` が約 10 mm、`MDUMP` の y が −7.202 mm）は、位置を `status` で除外していないため、まだ軌道の平均に入ります。当面は `bpms.txt` から外してください。`status` による除外は、Ext の `status` の欄を確認してから別の変更として行うべきです。
 - **`InterfaceATF2_Linac.get_bpms()`** も同じ方法（`status × 列3`）で `tmit` を計算しています。`LINAC:monitors` で強度が読めているかは未確認です。
