@@ -8,8 +8,10 @@
 | `f2c8890` | ATF2 Ext のビームラインの並びにある電磁石名を BPM 名に対応付ける |
 | `9f8fbb3` | BPM の強度が記録されていなくても軌道を計算する |
 | `126f4db` | 古い ATF2 Ext データのビームラインの並びを作り直すツールを追加 |
+| `ed6386d` | ATF2 Ext の四極の PV をまとめて読む |
+| `8c62217` | トラッキングモデルの更新で四極の強さが失われないようにする |
 
-変更したファイル：`backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`、`backends/atf2/machine_interfaces_atf2/repair_ext_sequence.py`（新規）、`machine_interfaces/Backend/State.py`、`tests/test_bpm_intensity.py`（新規）、`tests/test_repair_ext_sequence.py`（新規）
+変更したファイル：`backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`、`backends/atf2/machine_interfaces_atf2/repair_ext_sequence.py`（新規）、`machine_interfaces/Backend/State.py`、`tests/test_bpm_intensity.py`（新規）、`tests/test_repair_ext_sequence.py`（新規）、`tests/test_quadrupole_reads.py`（新規）
 
 ---
 
@@ -103,6 +105,33 @@ python -m machine_interfaces_atf2.repair_ext_sequence ~/CERN-Flight_Simulator-Da
 ### 確認結果
 - `tests/` の10件すべて成功。
 - 2026-11-19 のデータ：12ファイルを修復（並び 25 → 78項目）。修復後、`ATF2_Ext_20261119_112700_Orbit` で `ZH1X` と `ZV1X` に対する応答行列が50台の BPM で計算できました。応答が最大の BPM は `MQD18X`（`ZH1X`、水平）と `MQD4BFF`（`ZV1X`、垂直）で、生データの ± の軌道差と一致します。
+
+---
+
+## 4. 四極の PV をまとめて読む（`ed6386d`）
+
+**問題：** マシンの状態を記録するたび（`get_state()`。SysID なら1回振るごと）に `get_quadrupoles()` が呼ばれます。これまでは四極1台あたり最大9個の PV を順番に読み、それぞれ最大0.7秒待っていました。取り出しラインの四極21台にはムーバーが無いので、ムーバーの PV（1台6個）は決してつながらず、毎回待ち時間をすべて使っていました（約 21×6×0.7 秒 ≈ 90 秒）。
+
+**変更**（`InterfaceATF2_Ext.py`）
+- `get_quadrupoles()` は、指定された四極の PV をすべて `_pv_get_many()` でまとめて読みます。接続待ちは全体で0.7秒の期限を共有し、読み取りは並行して行います。つながらなかった PV は、次からは待ちません。CA が裏で探し続け、つながればその時点から読みます。
+- `_cached_pv()` が、PV の名前ごとに `PV` オブジェクトを1つだけ作って使い回します。読むたびに作り直していたのをやめました。`auto_monitor=False` なので、`get()` は毎回その時点の値を読みます。
+- `update_tracking_model_with_clibmagnet()` は、実機の値が有限で、かつモデルと違う四極だけを RF-Track のモデルに反映します。読むたびにビームを追跡し直していたのをやめました。
+- 四極ごとに出ていた `'Getting quadrupoles' PVs ...` は表示しなくなりました。
+
+読む値は以前と同じです（変更5のテストで確認）。実機での所要時間は測っていません。
+
+---
+
+## 5. トラッキングモデルの更新で四極の強さが失われないようにする（`8c62217`）
+
+**問題：** `InterfaceATF2_Ext` には `log()` がありませんでした（シミュレーション版と Linac 版は `self.log = print` を設定しています）。そのため `get_quadrupoles()` からモデルを更新すると、`self.log(...)` で `AttributeError` が起きていました。このエラーは「電流から K1 への変換の失敗」として扱われ、全四極の `bdes`/`bact` が NaN で記録され、モデルも更新されていませんでした。2026-11-19 のデータ（電流は読めているのに強さが全部 NaN）と一致します。変更4だけでは直りません。強さがモデルと違う四極があると、やはりこのエラーになります。
+
+**変更**
+- `InterfaceATF2_Ext.log()` を追加しました（メッセージを表示するだけ）。GUI が `interface.log` を設定すれば、そちらが使われます。
+- モデルの更新を、変換の後に独立した `try` で行うようにしました。失敗しても警告を出すだけで、強さの値は残ります。
+- `tests/test_quadrupole_reads.py`（新規、偽の PV を使ったテスト6件）：まとめて読んだ値、1つずつ読んだ場合と同じ結果になること、つながらない PV を1回しか待たないこと、モデルには変わった強さだけを反映すること、モデルの更新に失敗しても強さが残ること、`log()` があること。
+
+**確認結果：** `tests/` の16件すべて成功。この変更を外すと、新しいテスト6件のうち4件が、実機と同じメッセージ `'InterfaceATF2_Ext' object has no attribute 'log'` で失敗します。
 
 ---
 

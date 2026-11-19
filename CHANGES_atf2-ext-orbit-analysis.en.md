@@ -8,8 +8,10 @@ Japanese version: [CHANGES_atf2-ext-orbit-analysis.ja.md](CHANGES_atf2-ext-orbit
 | `f2c8890` | Map ATF2 Ext sequence magnets to their BPM names |
 | `9f8fbb3` | Keep the orbit when BPM intensity is not recorded |
 | `126f4db` | Add a tool to rebuild the sequence of older ATF2 Ext data |
+| `ed6386d` | Read quadrupole PVs in one batch in ATF2 Ext |
+| `8c62217` | Keep quadrupole strengths when the tracking model is updated |
 
-Files changed: `backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`, `backends/atf2/machine_interfaces_atf2/repair_ext_sequence.py` (new), `machine_interfaces/Backend/State.py`, `tests/test_bpm_intensity.py` (new), `tests/test_repair_ext_sequence.py` (new).
+Files changed: `backends/atf2/machine_interfaces_atf2/InterfaceATF2_Ext.py`, `backends/atf2/machine_interfaces_atf2/repair_ext_sequence.py` (new), `machine_interfaces/Backend/State.py`, `tests/test_bpm_intensity.py` (new), `tests/test_repair_ext_sequence.py` (new), `tests/test_quadrupole_reads.py` (new).
 
 ---
 
@@ -103,6 +105,33 @@ Then select the folders inside `CERN-Flight_Simulator-Data_sequence_fixed` in th
 ### Verification
 - All 10 tests in `tests/` pass.
 - 2026-11-19 data: 12 files repaired (sequence 25 → 78 entries). The response matrix of `ATF2_Ext_20261119_112700_Orbit` is then computed for `ZH1X` and `ZV1X` with 50 BPMs. The largest responses are at `MQD18X` (`ZH1X`, horizontal) and `MQD4BFF` (`ZV1X`, vertical), matching the raw +/- orbit differences.
+
+---
+
+## 4. Read quadrupole PVs in one batch (`ed6386d`)
+
+**Problem.** Every machine state (`get_state()`, e.g. each SysID excitation) calls `get_quadrupoles()`, which read up to 9 PVs per quadrupole one after another, each waiting up to 0.7 s. The 21 extraction-line quadrupoles have no mover, so their 6 mover PVs never connect and cost the full wait on every read (about 21 x 6 x 0.7 s, roughly 90 s).
+
+**Changes** (`InterfaceATF2_Ext.py`)
+- `get_quadrupoles()` reads all PVs of all requested quadrupoles with `_pv_get_many()`: connections share one 0.7 s deadline and the reads run in parallel. A PV that did not connect is not waited for again; CA keeps searching, and it is read as soon as it connects.
+- `_cached_pv()` keeps one `PV` object per name (`auto_monitor=False`, so `get()` is still a fresh read) instead of creating a new one for every read.
+- `update_tracking_model_with_clibmagnet()` pushes to the RF-Track model only the quadrupoles whose finite machine value differs from the model, instead of re-tracking the bunch on every read.
+- The per-quadrupole message `'Getting quadrupoles' PVs ...` is no longer printed.
+
+The values read are the same as before (checked in the tests of change 5). The time on the machine has not been measured.
+
+---
+
+## 5. Keep quadrupole strengths when the tracking model is updated (`8c62217`)
+
+**Problem.** `InterfaceATF2_Ext` had no `log()` method (the simulation and Linac interfaces set `self.log = print`). Updating the tracking model from `get_quadrupoles()` called `self.log(...)` and raised `AttributeError`, which was caught as a failed current-to-K1 conversion: `bdes`/`bact` were recorded as NaN for every quadrupole, and the model was never updated. This matches the 2026-11-19 data (currents read, strengths all NaN). Change 4 alone does not fix it: the error still occurs whenever a strength differs from the model.
+
+**Changes**
+- `InterfaceATF2_Ext.log()` prints the message; a GUI can still replace it by assigning `interface.log`.
+- The model update runs after the conversion and has its own `try`: a failure prints a warning and keeps the strengths.
+- `tests/test_quadrupole_reads.py` (new, 6 tests, fake PVs): values of the batched read, same result as reading one by one, missing PVs waited for only once, only changed strengths pushed to the model, strengths kept when the model update fails, `log()` exists.
+
+**Verification.** All 16 tests in `tests/` pass. Without this change, 4 of the 6 new tests fail with the message seen on the machine: `'InterfaceATF2_Ext' object has no attribute 'log'`.
 
 ---
 
