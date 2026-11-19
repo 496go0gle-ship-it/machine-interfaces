@@ -94,6 +94,10 @@ class SaveOrLoad():
                     selected = state.get_screens()["names"]
                 else:
                     selected = [elements_list.item(i).text() for i in range(elements_list.count())]
+        if not selected:
+            # No selection file and no initial state to fall back on: keep the current selection.
+            # (Iterating over None here raised TypeError, which aborts a PyQt6 application.)
+            return
         elements_list.clearSelection()
         for name in selected:
             for it in elements_list.findItems(name, _match_exactly()):
