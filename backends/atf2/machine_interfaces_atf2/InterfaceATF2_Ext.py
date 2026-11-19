@@ -274,17 +274,36 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
             raise KeyError(f"No A-K1 calibration for '{name}' ")
 
     def update_tracking_model_with_clibmagnet(self, nominal_bdes_value = None, nominal_bact_value = None, names=None):
+        if names is None:
+            names = list(self.quadrupoles)
         if isinstance(names, str):
             names = [names]
-        bact = np.array(nominal_bact_value, dtype=float)
-        bdes = np.array(nominal_bdes_value, dtype=float)
-        self.log(f"Updating tracking model for {names}..."
+        names = list(names)
+        bact = np.atleast_1d(np.array(nominal_bact_value, dtype=float))
+        bdes = np.atleast_1d(np.array(nominal_bdes_value, dtype=float))
+
+        # set_quadrupoles() re-tracks the whole bunch through the lattice, which is far too
+        # slow to do on every machine read. Push only the quads whose machine value is known
+        # (unreadable PVs give NaN) and differs from what the model already holds.
+        try:
+            model = self.tracking_interface.get_quadrupoles()
+            model_k1l = dict(zip(model["names"], np.asarray(model["bdes"], dtype=float)))
+        except Exception:
+            model_k1l = {}
+        changed = [
+            (name, float(value))
+            for name, value in zip(names, bact)
+            if np.isfinite(value)
+            and not (name in model_k1l and np.isclose(model_k1l[name], value, rtol=1e-9, atol=1e-12))
+        ]
+        if not changed:
+            return
+
+        self.log(f"Updating tracking model for {[name for name, _ in changed]}..."
                  f"Current nominal bdes value from the machine [1/m]: {bdes}, "
                  f"Current nominal bact value from the machine [1/m]: {bact}")
-        self.tracking_interface.set_quadrupoles(names, bact)
-        self.log(f"Reading new values set in the lattice:")
-        print(self.tracking_interface.get_quadrupoles(names)["bdes"])
-        self.log(f"Changed model values to match the lattice!")
+        self.tracking_interface.set_quadrupoles([name for name, _ in changed], [value for _, value in changed])
+        self.log(f"Changed model values to match the machine!")
 
     def insert_screen(self, screen_name):
         screen_pv_name = self.screen_pv_names.get(screen_name)
@@ -460,29 +479,44 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
         xdes, ydes, rolldes = [], [], []
         xact, yact, rollact = [], [], []
 
+        mover_keys = ("pv_set_x", "pv_set_y", "pv_set_roll", "pv_read_enc_x", "pv_read_enc_y", "pv_read_enc_roll")
+        pv_sets = []
         for name in names:
-            print(" 'Getting quadrupoles' PVs ...")
             current_name = self._quadrupole_current_pv_name(name)
             mover_name = self._quad_mover_pv_name(name)
             mover_pv = self.qmag_pv.get(mover_name)
             if mover_pv is None:
                 mover_pv = self._build_qmag_pv_names(mover_name)
                 self.qmag_pv[mover_name] = mover_pv
-            desired_current = self._pv_get(f"{current_name}:currentWrite", default=np.nan, timeout=0.7)
-            actual_current = self._pv_get(f"{current_name}:current", default=np.nan, timeout=0.7)
+            current_pvs = {suffix: f"{current_name}:{suffix}" for suffix in ("currentWrite", "current", "currentRead")}
+            pv_sets.append((current_pvs, {key: mover_pv.get(key) for key in mover_keys}))
+
+        # Read every PV of every requested quad in one batch: connections share a single
+        # timeout and the reads run in parallel, instead of up to 9 sequential 0.7 s waits
+        # per quad (PVs that do not exist, e.g. movers on quads without one, cost the full wait).
+        all_pv_names = [pv for current_pvs, mover_pvs in pv_sets
+                        for pv in (*current_pvs.values(), *mover_pvs.values()) if pv]
+        values = self._pv_get_many(all_pv_names, default=np.nan, timeout=0.7)
+
+        def value_of(pv_name):
+            return values.get(pv_name, np.nan) if pv_name else np.nan
+
+        for current_pvs, mover_pvs in pv_sets:
+            desired_current = value_of(current_pvs["currentWrite"])
+            actual_current = value_of(current_pvs["current"])
             if not np.isfinite(actual_current):
-                actual_current = self._pv_get(f"{current_name}:currentRead", default=np.nan, timeout=0.7)
+                actual_current = value_of(current_pvs["currentRead"])
             if not np.isfinite(desired_current):
                 desired_current = actual_current
 
             ides.append(desired_current)
             iact.append(actual_current)
-            xdes.append(self._pv_get(mover_pv.get("pv_set_x"), default=np.nan))
-            ydes.append(self._pv_get(mover_pv.get("pv_set_y"), default=np.nan))
-            rolldes.append(self._pv_get(mover_pv.get("pv_set_roll"), default=np.nan))
-            xact.append(self._pv_get(mover_pv.get("pv_read_enc_x"), default=np.nan))
-            yact.append(self._pv_get(mover_pv.get("pv_read_enc_y"), default=np.nan))
-            rollact.append(self._pv_get(mover_pv.get("pv_read_enc_roll"), default=np.nan))
+            xdes.append(value_of(mover_pvs["pv_set_x"]))
+            ydes.append(value_of(mover_pvs["pv_set_y"]))
+            rolldes.append(value_of(mover_pvs["pv_set_roll"]))
+            xact.append(value_of(mover_pvs["pv_read_enc_x"]))
+            yact.append(value_of(mover_pvs["pv_read_enc_y"]))
+            rollact.append(value_of(mover_pvs["pv_read_enc_roll"]))
 
         ides = np.array(ides, dtype=float)
         iact = np.array(iact, dtype=float)
@@ -2085,17 +2119,87 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
                 raw = f.read()
             return self._decode_ipbsm_dat(raw)
 
-    def _pv_get(self, pv_name, default=np.nan, timeout=0.7):
+    def _cached_pv(self, pv_name):
+        """Return one PV object per name, reused across calls.
+
+        Building a new PV() for every read repeats the connection handshake each time,
+        and with auto-monitoring every PV() adds a CA subscription that is never cleared.
+        auto_monitor=False keeps get() an actual CA read of the current value.
+        """
+        cache = self.__dict__.setdefault("_pv_cache", {})
+        pv = cache.get(pv_name)
+        if pv is None:
+            with self.__dict__.setdefault("_pv_cache_lock", threading.Lock()):
+                pv = cache.get(pv_name)
+                if pv is None:
+                    pv = PV(pv_name, auto_monitor=False)
+                    cache[pv_name] = pv
+        return pv
+
+    @staticmethod
+    def _pv_value_to_float(value, default):
+        if value is None:
+            return default
         try:
-            pv = PV(pv_name)
-            if not pv.wait_for_connection(timeout=timeout):
-                return default
-            val = pv.get(timeout=timeout)
-            if val is None:
-                return default
-            return float(val)
+            return float(value)
         except Exception:
             return default
+
+    def _pv_get(self, pv_name, default=np.nan, timeout=0.7):
+        try:
+            pv = self._cached_pv(pv_name)
+            if not pv.wait_for_connection(timeout=timeout):
+                return default
+            return self._pv_value_to_float(pv.get(timeout=timeout), default)
+        except Exception:
+            return default
+
+    def _pv_get_many(self, pv_names, default=np.nan, timeout=0.7):
+        """Read many scalar PVs at once and return {pv_name: float}.
+
+        Connections are awaited under one shared deadline and the reads are issued in
+        parallel, so N PVs cost about one timeout instead of N timeouts. A PV that failed
+        to connect on an earlier call is not waited for again; CA keeps searching for it
+        in the background, and it is read as soon as it connects.
+        """
+        names = list(dict.fromkeys(str(name) for name in pv_names if name))
+        values = {name: default for name in names}
+        if not names:
+            return values
+        unreachable = self.__dict__.setdefault("_pv_unreachable", set())
+        pvs = {}
+        for name in names:
+            try:
+                pvs[name] = self._cached_pv(name)
+            except Exception:
+                continue
+
+        deadline = time.monotonic() + float(timeout)
+        connected = []
+        for name, pv in pvs.items():
+            if not pv.connected and name not in unreachable:
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    pv.wait_for_connection(timeout=remaining)
+            if pv.connected:
+                unreachable.discard(name)
+                connected.append((name, pv))
+            else:
+                unreachable.add(name)
+
+        pending = []
+        for name, pv in connected:
+            try:
+                ca.get(pv.chid, wait=False)
+                pending.append((name, pv))
+            except Exception:
+                values[name] = self._pv_get(name, default=default, timeout=timeout)
+        for name, pv in pending:
+            try:
+                values[name] = self._pv_value_to_float(ca.get_complete(pv.chid, timeout=timeout), default)
+            except Exception:
+                values[name] = default
+        return values
 
     def _pv_put(self, pv_name, value):
         PV(pv_name).put(value)
