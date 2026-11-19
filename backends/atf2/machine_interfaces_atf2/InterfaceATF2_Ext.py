@@ -11,6 +11,59 @@ from machine_interfaces.Backend.EnergyChangeMethod import EnergyChangeMethod
 DR_FREQ = 714e3  # 714 MHz in kHz
 DR_MOMENTUM_COMPACTION = 2.1e-3
 
+# Bpms and correctors in beamline order
+EXT_SEQUENCE = (
+    "MB2X", "ZV1X", "QF1X", "ZV2X", "QD2X", "QF3X", "ZH1X", "ZV3X", "QF4X",
+    "ZH2X", "QD5X", "ZV4X", "ZV5X", "QF6X", "QF7X", "ZH3X", "QD8X", "ZV6X",
+    "QF9X", "ZH4X", "FONTK1", "ZV7X", "FONTP1", "QD10X", "ZH5X", "QF11X",
+    "FONTK2", "ZV8X", "FONTP2", "QD12X", "ZH6X", "QF13X", "QD14X", "FONTP3",
+    "ZH7X", "QF15X", "ZV9X", "QD16X", "ZH8X", "QF17X", "ZV10X", "QD18X","OTR0X",
+    "ZH9X", "QF19X","OTR1X", "ZV11X", "QD20X","OTR2X" , "ZH10X", "QF21X", "OTR3X","IPT1", "IPT2",
+    "IPT3", "IPT4", "QM16FF", "ZH1FF", "ZV1FF", "QM15FF", "QM14FF", "FB2FF",
+    "QM13FF", "QM12FF", "QM11FF", "QD10BFF", "QD10AFF", "QF9BFF",
+    "MSF6FF", "QF9AFF", "QD8FF", "QF7FF", "QD6FF", "QF5BFF", "MSF5FF",
+    "QF5AFF", "QD4BFF", "MSD4FF", "QD4AFF", "QF3FF", "QD2BFF", "QD2AFF",
+    "MSF1FF", "QF1FF", "MSD0FF", "QD0FF", "PREIP", "IPA", "IPB", "IPC", "M-PIP",
+)
+
+# Index of each BPM in the EPICS PV ATF2:monitors
+MONITOR_INDEX_TO_NAME = {
+    0: "MB1X", 1: "MB2X", 2: "MQF1X", 3: "MQD2X", 4: "MQF3X", 5: "MQF4X", 6: "MQD5X", 7: "MQF6X", 8: "MQF7X",
+    9: "MQD8X", 10: "MQF9X", 11: "MQD10X", 12: "MQF11X", 13: "MQD12X", 14: "MQF13X", 15: "MQD14X", 16: "MQF15X", 17: "MQD16X",
+    18: "MQF17X", 19: "MQD18X", 20: "MQF19X", 21: "MQD20X", 22: "MQF21X", 23: "IPBPM1", 24: "IPBPM2", 25: "nBPM1",
+    26: "nBPM2", 27: "nBPM3", 28: "MQM16FF", 29: "MQM15FF", 30: "MQM14FF", 31: "MFB2FF", 32: "MQM13FF", 33: "MQM12FF",
+    34: "MFB1FF", 35: "MQM11FF", 36: "MQD10BFF", 37: "MQD10AFF", 38: "MQF9BFF", 39: "MSF6FF", 40: "MQF9AFF", 41: "MQD8FF",
+    42: "MQF7FF", 43: "MQD6FF", 44: "MQF5BFF", 45: "MSF5FF", 46: "MQF5AFF", 47: "MQD4BFF", 48: "MSD4FF", 49: "MQD4AFF",
+    50: "MQF3FF", 51: "MQD2BFF", 52: "MQD2AFF", 53: "MSF1FF", 54: "MQF1FF", 55: "MSD0FF", 56: "MQD0FF", 57: "M1&2IP", 58: "MPIP",
+    59: "MDUMP", 60: "ICT1X", 61: "ICTDUMP", 62: "MW1X", 63: "MW1IP", 64: "MPREIP", 65: "MIPA", 66: "MIPB"}
+
+
+def build_ext_sequence():
+    """Return (sequence, sequence_raw) for the ATF2 extraction line, without EPICS.
+
+    The sequence lists magnets (QF1X, FB2FF, IPB); the BPM read at that location is named
+    M<magnet> (MQF1X, MFB2FF, MIPB). Translate to BPM names so that every BPM returned by
+    get_bpms() can be located with sequence.index(); MB1X and MFB1FF follow atf2_full_twiss.tfs.
+    `sequence` holds BPM and corrector names in beamline order; `sequence_raw` is the magnet
+    list it was built from.
+    """
+    bpm_names = set(MONITOR_INDEX_TO_NAME.values())
+
+    def as_bpm(element):
+        for candidate in (element, f"M{element}"):
+            if candidate in bpm_names:
+                return candidate
+        return None
+
+    sequence_raw = ["MB1X"] + list(EXT_SEQUENCE)
+    sequence_raw.insert(sequence_raw.index("QM11FF"), "FB1FF")
+    sequence = []
+    for element in sequence_raw:
+        name = element if element.lower().startswith('z') else as_bpm(element)
+        if name is not None and name not in sequence:
+            sequence.append(name)
+    return sequence, sequence_raw
+
 class CurrentDropToZeroError(RuntimeError):
     def __init__(self, message, *, target=None, readback=None, magnets=None):
         super().__init__(message)
@@ -42,20 +95,6 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
         self.bpm_sample_interval_s = 0.5
         self.screen_image_shape = (960, 1280) # image size = 1280 x 960
         self.tracking_interface = InterfaceATF2_Ext_RFTrack()
-        # Bpms and correctors in beamline order
-        sequence = [
-            "MB2X", "ZV1X", "QF1X", "ZV2X", "QD2X", "QF3X", "ZH1X", "ZV3X", "QF4X",
-            "ZH2X", "QD5X", "ZV4X", "ZV5X", "QF6X", "QF7X", "ZH3X", "QD8X", "ZV6X",
-            "QF9X", "ZH4X", "FONTK1", "ZV7X", "FONTP1", "QD10X", "ZH5X", "QF11X",
-            "FONTK2", "ZV8X", "FONTP2", "QD12X", "ZH6X", "QF13X", "QD14X", "FONTP3",
-            "ZH7X", "QF15X", "ZV9X", "QD16X", "ZH8X", "QF17X", "ZV10X", "QD18X","OTR0X",
-            "ZH9X", "QF19X","OTR1X", "ZV11X", "QD20X","OTR2X" , "ZH10X", "QF21X", "OTR3X","IPT1", "IPT2",
-            "IPT3", "IPT4", "QM16FF", "ZH1FF", "ZV1FF", "QM15FF", "QM14FF", "FB2FF",
-            "QM13FF", "QM12FF", "QM11FF", "QD10BFF", "QD10AFF", "QF9BFF",
-            "MSF6FF", "QF9AFF", "QD8FF", "QF7FF", "QD6FF", "QF5BFF", "MSF5FF",
-            "QF5AFF", "QD4BFF", "MSD4FF", "QD4AFF", "QF3FF", "QD2BFF", "QD2AFF",
-            "MSF1FF", "QF1FF", "MSD0FF", "QD0FF", "PREIP", "IPA", "IPB", "IPC", "M-PIP"
-        ]
 
         quadrupoles = [
             "QF1X", "QD2X", "QF3X","QF4X", "QD5X", "QF6X", "QF7X","QD8X","QF9X", "QD10X",
@@ -82,37 +121,12 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
             ]
 
         # keep monitor indexes from MONITOR_INDEX_TO_NAME as the source of truth.
-        self.MONITOR_INDEX_TO_NAME = {
-            0: "MB1X", 1: "MB2X", 2: "MQF1X", 3: "MQD2X", 4: "MQF3X", 5: "MQF4X", 6: "MQD5X", 7: "MQF6X", 8: "MQF7X",
-            9: "MQD8X", 10: "MQF9X", 11: "MQD10X", 12: "MQF11X", 13: "MQD12X", 14: "MQF13X", 15: "MQD14X", 16: "MQF15X", 17: "MQD16X",
-            18: "MQF17X", 19: "MQD18X", 20: "MQF19X", 21: "MQD20X", 22: "MQF21X", 23: "IPBPM1", 24: "IPBPM2", 25: "nBPM1",
-            26: "nBPM2", 27: "nBPM3", 28: "MQM16FF", 29: "MQM15FF", 30: "MQM14FF", 31: "MFB2FF", 32: "MQM13FF", 33: "MQM12FF",
-            34: "MFB1FF", 35: "MQM11FF", 36: "MQD10BFF", 37: "MQD10AFF", 38: "MQF9BFF", 39: "MSF6FF", 40: "MQF9AFF", 41: "MQD8FF",
-            42: "MQF7FF", 43: "MQD6FF", 44: "MQF5BFF", 45: "MSF5FF", 46: "MQF5AFF", 47: "MQD4BFF", 48: "MSD4FF", 49: "MQD4AFF",
-            50: "MQF3FF", 51: "MQD2BFF", 52: "MQD2AFF", 53: "MSF1FF", 54: "MQF1FF", 55: "MSD0FF", 56: "MQD0FF", 57: "M1&2IP", 58: "MPIP",
-            59: "MDUMP", 60: "ICT1X", 61: "ICTDUMP", 62: "MW1X", 63: "MW1IP", 64: "MPREIP", 65: "MIPA", 66: "MIPB"}
+        self.MONITOR_INDEX_TO_NAME = dict(MONITOR_INDEX_TO_NAME)
 
         self.sextupoles = ["SF6FF", "SK4FF", "SK3FF", "SF5FF", "SD4FF", "SK2FF", "SK1FF", "SF1FF", "SD0FF"]
         self.screens = ['OTR0X', 'OTR1X','OTR2X','OTR3X']
 
-        # The sequence lists magnets (QF1X, FB2FF, IPB); the BPM read at that location is named
-        # M<magnet> (MQF1X, MFB2FF, MIPB). Translate to BPM names so that every BPM returned by
-        # get_bpms() can be located with sequence.index(); MB1X and MFB1FF follow atf2_full_twiss.tfs.
-        bpm_names = set(self.MONITOR_INDEX_TO_NAME.values())
-
-        def as_bpm(element):
-            for candidate in (element, f"M{element}"):
-                if candidate in bpm_names:
-                    return candidate
-            return None
-
-        sequence = ["MB1X"] + list(sequence)
-        sequence.insert(sequence.index("QM11FF"), "FB1FF")
-        sequence_filtered = []
-        for element in sequence:
-            name = element if element.lower().startswith('z') else as_bpm(element)
-            if name is not None and name not in sequence_filtered:
-                sequence_filtered.append(name)
+        sequence_filtered, sequence = build_ext_sequence()
 
         bpms_unlocated = [name for name in self.MONITOR_INDEX_TO_NAME.values() if name not in sequence_filtered]
         if bpms_unlocated:
