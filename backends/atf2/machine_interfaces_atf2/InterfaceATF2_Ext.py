@@ -95,17 +95,28 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
         self.sextupoles = ["SF6FF", "SK4FF", "SK3FF", "SF5FF", "SD4FF", "SK2FF", "SK1FF", "SF1FF", "SD0FF"]
         self.screens = ['OTR0X', 'OTR1X','OTR2X','OTR3X']
 
-        # Use list comprehension to filter out strings starting with 'Z' or 'z'
-        monitors_from_sequence = [string for string in sequence if not string.lower().startswith('z')]
+        # The sequence lists magnets (QF1X, FB2FF, IPB); the BPM read at that location is named
+        # M<magnet> (MQF1X, MFB2FF, MIPB). Translate to BPM names so that every BPM returned by
+        # get_bpms() can be located with sequence.index(); MB1X and MFB1FF follow atf2_full_twiss.tfs.
+        bpm_names = set(self.MONITOR_INDEX_TO_NAME.values())
 
-        # Check if the bpms in the config files are known to Epics
-        bpm_ok = all(bpm in monitors for bpm in monitors_from_sequence)
-        if not bpm_ok:
-            bpms_unknown = [bpm for bpm in monitors_from_sequence if bpm not in monitors]
-            print(f'Unknown bpms {bpms_unknown} removed from list')
+        def as_bpm(element):
+            for candidate in (element, f"M{element}"):
+                if candidate in bpm_names:
+                    return candidate
+            return None
 
-        # Only retain BPMs in config file which are known by Epics
-        sequence_filtered = [element for element in sequence if (element in monitors) or element.lower().startswith('z')]
+        sequence = ["MB1X"] + list(sequence)
+        sequence.insert(sequence.index("QM11FF"), "FB1FF")
+        sequence_filtered = []
+        for element in sequence:
+            name = element if element.lower().startswith('z') else as_bpm(element)
+            if name is not None and name not in sequence_filtered:
+                sequence_filtered.append(name)
+
+        bpms_unlocated = [name for name in self.MONITOR_INDEX_TO_NAME.values() if name not in sequence_filtered]
+        if bpms_unlocated:
+            print(f'BPMs without a beamline position (not in sequence): {bpms_unlocated}')
 
         # Subset of BPMs and correctors from the config file
         self.sequence = sequence_filtered
