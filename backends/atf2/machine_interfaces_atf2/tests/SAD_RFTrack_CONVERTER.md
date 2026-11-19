@@ -67,7 +67,7 @@ declarations are a hard error; they are never silently treated as drifts.
 | `CAVI` / `CAV` | disabled drift by default; finite-length Linac CAVI can become `TW_Structure` | `RFCAVITY` | RF synchronisation and beam loading remain model-specific |
 | `TCAVI` | retained but requires an external calibrated RF field model | field-free `MARKER` | intentionally not approximated as a transverse kick |
 | `MONI`, `MARK` | `Bpm`, zero-length `Drift` | `MONITOR`, `MARKER` | direct |
-| `COORD` | source parameters retained | `MARKER` | no one-to-one RFTrack lattice map; status is explicit |
+| `COORD` | `SADCoord` native reference-plane transform | `MARKER`, followed by `install_sad_coordinates()` | position, direction and flight time; SAD `DIR == 0` calling convention |
 | `APERT` | source boundary parameters retained | `MARKER` | explicit RF-Track aperture geometry must be selected; no silent rectangular/elliptical assumption |
 | `DX`, `DY`, `ROTATE` on supported elements | post-placement RFTrack offsets | source retained / `TILT` | validated for API placement; field-roll convention still needs SAD-map comparison |
 
@@ -83,3 +83,30 @@ A zero-angle `BEND` with nonzero `K0` or `K1` is accepted as a corrector only
 when its ATF name identifies its plane (`ZH`/`ZX` for horizontal, `ZV`/`ZY`
 for vertical).  An otherwise ambiguous powered BEND is rejected instead of
 being guessed as a horizontal corrector.
+
+## Numerical development profile, 2026-11-17
+
+The explicit `ATF2_LinacBTDR_RFTrack_v2.build_sad_v2_upstream()` profile
+uses SAD integrated K1 without an extra length factor, six COORD transforms,
+and an IIN.1 DR entry. Its handoff is a fixed rigid reference-plane alignment,
+not a Twiss/covariance match. The historical IPZT-to-IIN geometry is a stated
+assumption, not a surveyed current machine interface. Legacy frozen inputs
+are not overwritten. The input TFS hash is checked on construction.
+
+The native converter preserves the nominal SBend main field instead of calling
+`set_K0(0)`. Nonzero additional K0 in an ordinary bend is rejected: RFTrack's
+set_K0 changes reference curvature as well as field, so a fixed-geometry field
+model is needed. Named zero-angle correctors remain supported. Magnet placement
+uses Frame origins in mm, with roll as the first angular argument; a third
+scalar argument to set_offsets would translate z rather than rotate the magnet.
+
+No APERT/RADIUS chamber declarations were found in these supplied Linac/BT/DR
+SAD sources. Do not infer a global 10 mm aperture. The injection experiment
+separately declares a historical DR BPM bore (radius 12.2 mm at MB pickups only)
+and a provisional measured-position validity radius of 10 mm. These are
+additional documented assumptions, not aperture data read from SAD.
+
+Numerical qualification and limitations: `simulation-agent/results/
+bt-dr-model-v2-20261117/qualification-bpm-bore.json`; eight model tests in
+`simulation-agent/tests/test_sad_model_v2.py`. These checks are not a new
+end-to-end SAD tracking run or proof of current hardware equivalence.

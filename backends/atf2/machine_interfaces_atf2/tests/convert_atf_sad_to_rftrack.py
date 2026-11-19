@@ -338,8 +338,8 @@ def _record(element: Element, s_exit: float) -> dict[str, Any]:
     mapping_status = "exact-static"
     mapping_note = ""
     if element.sad_type == "COORD":
-        mapping_status = "preserved-unmodelled-coordinate-transform"
-        mapping_note = "SAD COORD has no one-to-one RF-Track lattice element; exported as a zero-length marker."
+        mapping_status = "native-plane-transform-tfs-postprocessing-required"
+        mapping_note = "Native SADCoord includes flight time; TFS placeholder requires install_sad_coordinates."
     elif element.sad_type == "APERT":
         mapping_status = "requires-explicit-aperture-geometry"
         mapping_note = "SAD APERT boundary parameters are retained, but are not reduced to an RF-Track aperture shape automatically."
@@ -356,8 +356,8 @@ def _record(element: Element, s_exit: float) -> dict[str, Any]:
         "s": s_exit,
         "length": length,
         "angle": angle,
-        # SAD BEND K0 is an additional integrated dipole kick.  It is K0L
-        # in TFS; RF-Track SBend.set_K0() instead receives K0L / L.
+        # SAD BEND K0 is an additional integrated kick on top of ANGLE.
+        # RF-Track SBend.set_K0() sets total curvature, including ANGLE/L.
         "k0l": k0l,
         "k1l": k1l if keyword == "QUADRUPOLE" or keyword == "SBEND" else 0.0,
         "k2l": k2l if keyword == "SEXTUPOLE" else 0.0,
@@ -450,10 +450,15 @@ def build_rftrack_lattice(
     momentum = float(manifest["conventions"]["reference_momentum_mev_c"])
     p_over_q = momentum / float(charge)
     lattice = rft.Lattice()
+    coordinate_keepalive = []
     for record in manifest["records"]:
         kind = str(record["keyword"])
         length = float(record["length"])
-        if kind in {"DRIFT", "MARKER", "TRANSVERSE_RFCAVITY"}:
+        if record['sad_type'] == 'COORD':
+            from machine_interfaces_atf2.SAD_RFTrack_coordinates import SADCoord
+            element = SADCoord(str(record['name']), record['source_attributes'])
+            coordinate_keepalive.append(element)
+        elif kind in {"DRIFT", "MARKER", "TRANSVERSE_RFCAVITY"}:
             element = rft.Drift(length)
         elif kind == "MONITOR":
             element = rft.Bpm(length)
@@ -481,10 +486,10 @@ def build_rftrack_lattice(
                 length, float(record["angle"]), p_over_q,
                 float(record["e1"]), float(record["e2"]),
             )
-            if length:
-                element.set_K0(float(record["k0l"]) / length)
-            elif record["k0l"]:
-                raise ValueError(f"{record['name']}: nonzero BEND K0 requires nonzero length")
+            if record["k0l"]:
+                # set_K0 also changes the RFTrack reference curvature. SAD K0
+                # must leave ANGLE geometry fixed, so do not fake equivalence.
+                raise ValueError(f"{record['name']}: nonzero BEND K0 needs a fixed-geometry field model")
             element.set_K1L(float(record["k1l"]))
         elif kind == "RFCAVITY":
             if rf_mode == "disabled":
@@ -511,8 +516,12 @@ def build_rftrack_lattice(
         # a Lattice/Volume.
         lattice.append(element)
         dx, dy, roll = float(record["offset_x_m"]), float(record["offset_y_m"]), float(record["tilt"])
-        if dx or dy or roll:
-            lattice[int(lattice.size()) - 1].set_offsets(dx, dy, roll)
+        if record['sad_type'] != 'COORD' and (dx or dy or roll):
+            # Three scalar arguments mean x/y/z translations, NOT x/y/roll.
+            # Frame origins are mm and rotations are radians.
+            lattice[int(lattice.size()) - 1].set_offsets(
+                rft.Frame(dx*1000., dy*1000., 0., roll, 0., 0.))
+    lattice._sad_coord_keepalive = coordinate_keepalive
     return lattice
 
 

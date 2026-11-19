@@ -582,6 +582,8 @@ class ATF2LinacBTDRRFTrack:
         dr_rf_mode: str = "disabled",
         dr_quantum_radiation: bool = False,
         dr_rf_phase_deg: float | None = None,
+        linac_bt_tfs_path: Path | None = None,
+        sad_coordinate_records: list[dict[str, Any]] | None = None,
     ):
         if dr_rf_mode not in {"disabled", "equilibrium"}:
             raise ValueError("dr_rf_mode must be 'disabled' or 'equilibrium'")
@@ -637,7 +639,8 @@ class ATF2LinacBTDRRFTrack:
             for cavity in cavities
         }
         helper = _load_rftrack_model(_sad_project_root())
-        combined_tfs = helper.GENERATED / "atf2_linac_bt_RFTrack.twiss"
+        combined_tfs = (Path(linac_bt_tfs_path) if linac_bt_tfs_path is not None
+                        else helper.GENERATED / "atf2_linac_bt_RFTrack.twiss")
         self.linac_bt_lattice, self.linac_bt_metadata = helper.prepare_accelerating_lattice(
             combined_tfs,
             input_momentum_mev_c=self.input_momentum_mev_c,
@@ -645,6 +648,10 @@ class ATF2LinacBTDRRFTrack:
             cavity_phase_adjustments_deg=cavity_phase_adjustments_deg,
             magnet_cavity_phase_adjustments_deg=magnet_cavity_phase_adjustments_deg,
         )
+        if sad_coordinate_records is not None:
+            from machine_interfaces_atf2.SAD_RFTrack_coordinates import install_sad_coordinates
+            self.linac_bt_metadata['sad_coordinate_transforms'] = install_sad_coordinates(
+                self.linac_bt_lattice, sad_coordinate_records)
         self.linac_bt_metadata["klystron_cavity_groups_assumption"] = {
             name: list(cavities) for name, cavities in KLYSTRON_CAVITY_GROUPS.items()
         }

@@ -1,0 +1,69 @@
+{
+  "version": "sad-v2-20261117",
+  "tfs": "atf2_linac_bt_RFTrack.twiss",
+  "tfs_sha256": "65721add7c9643087700c0940a3153a303dc784a8b9ec6d5984c6dec503a062f",
+  "coordinates": [
+    {
+      "name": "C1T",
+      "sad_type": "COORD",
+      "attributes": {
+        "CHI1": 0.00576432,
+        "DIR": 1.0,
+        "DX": -0.022082
+      }
+    },
+    {
+      "name": "C2T",
+      "sad_type": "COORD",
+      "attributes": {
+        "CHI1": -0.00976444,
+        "DX": -0.021619
+      }
+    },
+    {
+      "name": "CC1",
+      "sad_type": "COORD",
+      "attributes": {
+        "CHI1": -3.85009350575e-06,
+        "DX": 3.06082294225e-06
+      }
+    },
+    {
+      "name": "C3T",
+      "sad_type": "COORD",
+      "attributes": {
+        "CHI1": 0.00976444,
+        "DIR": 1.0,
+        "DX": -0.00631005
+      }
+    },
+    {
+      "name": "C4T",
+      "sad_type": "COORD",
+      "attributes": {
+        "CHI1": -0.005,
+        "DX": -0.00498125
+      }
+    },
+    {
+      "name": "CC2",
+      "sad_type": "COORD",
+      "attributes": {
+        "CHI1": 0.00013501912194,
+        "DX": -2.911242188e-05
+      }
+    }
+  ],
+  "source_nominal_mm_mrad": [
+    5.081574321500001,
+    2.5046484058,
+    -9.9004932326e-16,
+    -4.943576022e-16
+  ],
+  "dr_entry": "IIN.1",
+  "boundary_assumption": "IPZT after BK1R corresponds to IIN after KII; historical geometry, not current survey",
+  "aperture_policy": "sad_declared",
+  "explicit_sad_apertures": [],
+  "aperture_note": "No APERT or RADIUS declarations in supplied Linac/BT/DR SAD sources; do not invent 10/5 mm chambers",
+  "qualification": "development model; numerical validation required before experiments; machine equivalence not asserted"
+}
