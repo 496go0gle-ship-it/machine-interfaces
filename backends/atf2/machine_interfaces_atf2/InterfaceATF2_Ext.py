@@ -1044,6 +1044,7 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
         x_list, y_list, tmit_list = [], [], []
         s_ref = None
         bpm_names = None
+        intensity_missing = False
         p = PV("ATF2:monitors")
         sample = 0
         while sample < self.nsamples:
@@ -1061,7 +1062,14 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
 
                 x = bpm[:, 1]
                 y = bpm[:, 2]
-                tmit = status * bpm[:, 3]
+                intensity = bpm[:, 3]
+                if np.any(np.isfinite(intensity) & (intensity > 0)):
+                    tmit = status * intensity
+                else:
+                    # The extraction line leaves the intensity field of ATF2:monitors empty (it reads 0
+                    # for every BPM). Record it as not measured (NaN) rather than as "no beam" (0).
+                    tmit = np.full(intensity.shape, np.nan)
+                    intensity_missing = True
                 s = bpm[:, 4]
 
                 if s_ref is None:
@@ -1080,6 +1088,9 @@ class InterfaceATF2_Ext(AbstractMachineInterface):
             except Exception as e:
                 print(f'An error occurred while reading BPMs: {e}')
                 time.sleep(self.bpm_sample_interval_s)
+
+        if intensity_missing:
+            print('ATF2:monitors reports no BPM intensity; tmit is recorded as NaN (not measured).')
 
         bpms = {
             "names": list(bpm_names),

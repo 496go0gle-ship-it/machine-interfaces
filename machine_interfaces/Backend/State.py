@@ -121,8 +121,17 @@ class State:
         bpms = self.get_bpms(names)
         tmit_all = np.asarray(bpms['tmit'], dtype=float)
         signal = np.abs(tmit_all)
-        reference_signal = np.nanmedian(signal, axis=0)
-        valid_signal = (np.isfinite(signal) & (signal > 0) & (signal >= 0.5 * reference_signal))
+        if np.any(np.isfinite(signal) & (signal > 0)):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                reference_signal = np.nanmedian(signal, axis=0)
+            valid_signal = (np.isfinite(signal) & (signal > 0) & (signal >= 0.5 * reference_signal))
+        else:
+            # No BPM reports an intensity (e.g. ATF2:monitors leaves it empty in the extraction
+            # line, so it reads 0): the intensity cannot tell shots with beam from shots without,
+            # so keep every shot instead of discarding the whole orbit.
+            warnings.warn("BPM intensity (tmit) is not recorded; averaging the orbit without intensity filtering.", RuntimeWarning, stacklevel=2)
+            valid_signal = np.ones(signal.shape, dtype=bool)
         tmit_all = np.where(valid_signal, tmit_all, np.nan)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
